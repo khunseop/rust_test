@@ -179,7 +179,8 @@ impl App {
                 {
                     // Windows에서는 taskkill 명령어 사용
                     use std::process::Command;
-                    let pid_u32: u32 = (*pid).into();
+                    // sysinfo 0.30에서 Pid는 Copy이고 u32로 변환 가능
+                    let pid_u32 = pid.as_u32();
                     let pid_str = pid_u32.to_string();
                     let output = Command::new("taskkill")
                         .args(&["/PID", &pid_str, "/F"])
@@ -261,7 +262,7 @@ fn ui(frame: &mut Frame, app: &App) {
             Constraint::Length(3),
             Constraint::Length(3),
         ])
-        .split(frame.area());
+        .split(frame.size());
 
     // 헤더
     let header = Paragraph::new(vec![Line::from(vec![Span::styled(
@@ -323,7 +324,7 @@ fn render_process_list(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::White)
             };
             
-            let pid_u32: u32 = (*pid).into();
+            let pid_u32 = pid.as_u32();
             let content = format!("[{}] {}", pid_u32, name);
             ListItem::new(content).style(style)
         })
