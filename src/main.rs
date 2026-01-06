@@ -225,6 +225,7 @@ fn main() -> io::Result<()> {
                         app.mode = AppMode::ProcessSelect;
                         app.selected_pid = None;
                         app.timer_start = None;
+                        app.timer_input.clear();
                         app.refresh_processes();
                     } else {
                         app.status_message = format!("프로세스 종료 실패");
@@ -236,9 +237,16 @@ fn main() -> io::Result<()> {
 
         should_quit = handle_events(&mut app)?;
         
-        // 프로세스 목록 주기적 갱신
+        // 프로세스 목록 주기적 갱신 (ProcessSelect 모드일 때만)
         if app.mode == AppMode::ProcessSelect {
             app.refresh_processes();
+        }
+        
+        // 타이머 실행 중일 때는 짧은 대기로 빠른 갱신
+        if app.mode == AppMode::TimerRunning {
+            std::thread::sleep(Duration::from_millis(100));
+        } else {
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -359,7 +367,11 @@ fn render_process_list(frame: &mut Frame, app: &App, area: Rect) {
 fn render_timer_input(frame: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(5),
+            Constraint::Min(0),
+        ])
         .split(area);
 
     let selected_process = if let Some(pid) = app.selected_pid {
@@ -372,27 +384,56 @@ fn render_timer_input(frame: &mut Frame, app: &App, area: Rect) {
         "없음".to_string()
     };
 
-    let info = Paragraph::new(vec![
+    // 선택된 프로세스 정보
+    let process_info = Paragraph::new(vec![Line::from(vec![Span::styled(
+        format!("선택된 프로세스: {}", selected_process),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )])])
+    .block(Block::default().borders(Borders::ALL).title("프로세스 정보"))
+    .alignment(Alignment::Center);
+    
+    frame.render_widget(process_info, chunks[0]);
+
+    // 타이머 입력 필드
+    let input_display = if app.timer_input.is_empty() {
+        "시간을 입력하세요 (예: 5:30 또는 300)"
+    } else {
+        app.timer_input.as_str()
+    };
+    
+    let input_style = if app.timer_input.is_empty() {
+        Style::default().fg(Color::Gray)
+    } else {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    };
+
+    let input_info = Paragraph::new(vec![
+        Line::from(""),
         Line::from(vec![Span::styled(
-            format!("선택된 프로세스: {}", selected_process),
-            Style::default().fg(Color::Cyan),
+            format!("타이머 시간: {}", input_display),
+            input_style,
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            format!("타이머 입력: {}", app.timer_input),
-            Style::default().fg(Color::Green),
+            "형식: 분:초 (예: 5:30) 또는 초 단위 (예: 300)",
+            Style::default().fg(Color::Yellow),
         )]),
     ])
     .block(Block::default().borders(Borders::ALL).title("타이머 설정"))
+    .alignment(Alignment::Center)
     .wrap(Wrap { trim: true });
     
-    frame.render_widget(info, chunks[0]);
+    frame.render_widget(input_info, chunks[1]);
 }
 
 fn render_timer_running(frame: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(7),
+            Constraint::Min(0),
+        ])
         .split(area);
 
     let selected_process = if let Some(pid) = app.selected_pid {
@@ -405,33 +446,54 @@ fn render_timer_running(frame: &mut Frame, app: &App, area: Rect) {
         "없음".to_string()
     };
 
+    // 프로세스 정보
+    let process_info = Paragraph::new(vec![Line::from(vec![Span::styled(
+        format!("프로세스: {}", selected_process),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )])])
+    .block(Block::default().borders(Borders::ALL).title("프로세스 정보"))
+    .alignment(Alignment::Center);
+    
+    frame.render_widget(process_info, chunks[0]);
+
+    // 타이머 카운트다운
     let remaining = app.get_remaining_time().unwrap_or(0);
     let minutes = remaining / 60;
     let seconds = remaining % 60;
     let time_str = format!("{:02}:{:02}", minutes, seconds);
+    
+    // 경고 색상 (1분 미만일 때 빨간색)
+    let time_color = if remaining < 60 {
+        Color::Red
+    } else if remaining < 300 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
 
-    let info = Paragraph::new(vec![
+    let timer_info = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(""),
         Line::from(vec![Span::styled(
-            format!("프로세스: {}", selected_process),
-            Style::default().fg(Color::Cyan),
+            time_str,
+            Style::default()
+                .fg(time_color)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            format!("남은 시간: {}", time_str),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            "타이머 실행 중...",
+            Style::default().fg(Color::White),
         )]),
     ])
-    .block(Block::default().borders(Borders::ALL).title("타이머 실행 중"))
-    .wrap(Wrap { trim: true })
+    .block(Block::default().borders(Borders::ALL).title("남은 시간"))
     .alignment(Alignment::Center);
     
-    frame.render_widget(info, chunks[0]);
+    frame.render_widget(timer_info, chunks[1]);
 }
 
 fn handle_events(app: &mut App) -> io::Result<bool> {
-    if event::poll(Duration::from_millis(100))? {
+    if event::poll(Duration::from_millis(10))? {
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match app.mode {
@@ -466,7 +528,10 @@ fn handle_events(app: &mut App) -> io::Result<bool> {
                             }
                             KeyCode::Enter => app.start_timer(),
                             KeyCode::Char(c) => {
-                                app.timer_input.push(c);
+                                // 숫자와 콜론만 허용
+                                if c.is_ascii_digit() || c == ':' {
+                                    app.timer_input.push(c);
+                                }
                             }
                             KeyCode::Backspace => {
                                 app.timer_input.pop();
